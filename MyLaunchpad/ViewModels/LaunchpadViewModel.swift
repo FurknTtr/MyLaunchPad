@@ -172,7 +172,7 @@ class LaunchpadViewModel: ObservableObject {
         guard folderWatchers.isEmpty else { return }
         // Sistem klasörleri (/System/Applications) salt okunur, izlemeye gerek yok
         for dir in ["/Applications", "\(NSHomeDirectory())/Applications"] {
-            let fd = open(dir, O_EVTONLY)
+            let fd = Darwin.open(dir, O_EVTONLY)
             guard fd >= 0 else { continue }
             let source = DispatchSource.makeFileSystemObjectSource(
                 fileDescriptor: fd,
