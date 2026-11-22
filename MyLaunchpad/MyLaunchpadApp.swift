@@ -21,8 +21,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.global(qos: .background).async {
             self.preloadIcons()
         }
+
+        // 4/5 parmak pinch: içeri = aç, dışarı = kapat
+        let monitor = GestureMonitor.shared
+        monitor.onPinchIn = { [weak self] in self?.showLaunchpad() }
+        monitor.onPinchOut = { [weak self] in self?.hideLaunchpad() }
+        monitor.start()
+
+        // Uykudan uyanınca trackpad dinlemeyi yeniden başlat
+        _ = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            GestureMonitor.shared.restart()
+        }
     }
-    
+
+    func showLaunchpad() {
+        NSApp.unhide(nil)
+        if let window = NSApplication.shared.windows.first {
+            window.makeKeyAndOrderFront(nil)
+        }
+        NSApp.activate()
+    }
+
+    func hideLaunchpad() {
+        guard NSApp.isActive, !NSApp.isHidden else { return }
+        NSApp.hide(nil)
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if let window = NSApplication.shared.windows.first {
             window.makeKeyAndOrderFront(nil)
