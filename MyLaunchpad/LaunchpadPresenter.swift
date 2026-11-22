@@ -8,6 +8,7 @@
 
 import SwiftUI
 import AppKit
+import Combine
 
 final class LaunchpadPresenter: ObservableObject {
     static let shared = LaunchpadPresenter()
