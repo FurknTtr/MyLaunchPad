@@ -24,6 +24,15 @@ class LaunchpadViewModel: ObservableObject {
         }
     }
     @Published var isEditing = false
+    /// "Diğer" klasörünün içindekiler (Yardımcı Programlar) ve paneli açık mı
+    @Published var utilityApps: [AppItem] = []
+    @Published var isFolderOpen = false
+    @Published var isSettingsOpen = false
+    /// Klasör ya da ayarlar paneli açıkken ızgarada gezinme/sürükleme/kaydırma durur
+    var isPanelOpen: Bool { isFolderOpen || isSettingsOpen }
+    static let utilitiesFolderName = "Diğer"
+    static let utilitiesFolderPath = "folder://utilities"
+    private static let utilitiesDirectory = "/System/Applications/Utilities/"
     @Published var searchText = ""
     @Published var dragOffset: CGFloat = 0
     
@@ -32,8 +41,6 @@ class LaunchpadViewModel: ObservableObject {
 
     /// Klavye ve sayfa noktaları için standart sayfa geçişi (zıplamasız yay)
     static let pageAnimation = Animation.spring(duration: 0.5, bounce: 0)
-    /// Parmağı bırakınca sayfanın yerine oturma süresi
-    private let snapDuration: TimeInterval = 0.6
     /// Bırakınca devralınan hızın üst sınırı (yükseldikçe sayfa "fırlar")
     private let maxSnapVelocity: Double = 3
 
@@ -47,13 +54,15 @@ class LaunchpadViewModel: ObservableObject {
 
     // Sayfa değiştirme eşikleri
     private let distanceThreshold: CGFloat = 0.3   // sayfa genişliğinin %30'u kadar sürükleyince
-    private let flickVelocity: CGFloat = 1000      // ya da bu hızdan hızlı fırlatınca (nokta/sn, büyütülmüş)
+    /// Hızlı fırlatma eşiği; kaydırma hassasiyetiyle birlikte ölçeklenir
+    private var flickVelocity: CGFloat { 1000 * CGFloat(settings.scrollSensitivity) / 2.4 }
+    private var settings: SettingsStore { .shared }
+    /// Bir sayfadaki uygulama sayısı (ayarlardaki sütun × satır)
+    var appsPerPage: Int { settings.appsPerPage }
     private let edgeResistance: CGFloat = 0.3      // ilk/son sayfada lastik efekti
-    /// Trackpad küçük, ekran büyük: parmak hareketi bu kadar büyütülür
-    /// (trackpad'i baştan sona kaydırmak ≈ bir sayfa)
-    private let dragMultiplier: CGFloat = 2.4
+    // Kaydırma hassasiyeti ve yerine oturma süresi ayarlardan gelir (SettingsStore)
 
-    private var pageCount: Int { max(1, apps.chunked(into: 35).count) }
+    private var pageCount: Int { max(1, apps.chunked(into: appsPerPage).count) }
 
     init() {
         self.currentPage = UserDefaults.standard.integer(forKey: "LastLaunchpadPage")
@@ -68,6 +77,7 @@ class LaunchpadViewModel: ObservableObject {
     }
 
     private func handleScroll(_ event: NSEvent) {
+        if isPanelOpen { return }
         // Parmak kalktıktan sonra macOS'un gönderdiği "momentum" olaylarını yok say:
         // sayfa zaten parmağın kalktığı anda yerine oturmaya başladı.
         if !event.momentumPhase.isEmpty { return }
@@ -81,7 +91,7 @@ class LaunchpadViewModel: ObservableObject {
         let rawDX = event.scrollingDeltaX
         let isHorizontal = abs(rawDX) > abs(event.scrollingDeltaY)
         // Fare tekerleği (phase yok) zaten büyük adımlarla gelir, onu büyütme
-        let dx = event.phase.isEmpty ? rawDX : rawDX * dragMultiplier
+        let dx = event.phase.isEmpty ? rawDX : rawDX * CGFloat(settings.scrollSensitivity)
         guard isDragging || isHorizontal, dx != 0 else { return }
 
         // Parmak hızını ölç (yumuşatılmış)
@@ -135,7 +145,7 @@ class LaunchpadViewModel: ObservableObject {
         }
         velocity = 0
 
-        withAnimation(.interpolatingSpring(duration: snapDuration, bounce: 0, initialVelocity: relativeVelocity)) {
+        withAnimation(.interpolatingSpring(duration: settings.snapDuration, bounce: 0, initialVelocity: relativeVelocity)) {
             currentPage = target
             dragOffset = 0
         }
@@ -222,7 +232,19 @@ class LaunchpadViewModel: ObservableObject {
                 }
             }
         }
-        let defaultOrder = loaded.sorted { $0.isSystemApp != $1.isSystemApp ? $0.isSystemApp : ($0.isSystemApp ? $0.name < $1.name : $0.creationDate < $1.creationDate) }
+        // Yardımcı Programlar ayrı tutulur, ızgarada tek bir "Diğer" klasörü olarak görünür
+        let utilities = loaded.filter { $0.path.hasPrefix(Self.utilitiesDirectory) }
+        let mainApps = loaded.filter { !$0.path.hasPrefix(Self.utilitiesDirectory) }
+        self.utilityApps = utilities.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+
+        var defaultOrder = mainApps.sorted { $0.isSystemApp != $1.isSystemApp ? $0.isSystemApp : ($0.isSystemApp ? $0.name < $1.name : $0.creationDate < $1.creationDate) }
+        if !utilities.isEmpty {
+            let folder = AppItem(name: Self.utilitiesFolderName, path: Self.utilitiesFolderPath,
+                                 icon: NSImage(), creationDate: .distantPast, isSystemApp: true, isFolder: true)
+            // Varsayılan yeri: sistem uygulamalarının hemen arkası
+            let index = defaultOrder.firstIndex(where: { !$0.isSystemApp }) ?? defaultOrder.count
+            defaultOrder.insert(folder, at: index)
+        }
 
         // Kullanıcının kaydettiği sıra varsa onu kullan; yeni uygulamalar sona eklenir
         let saved = UserDefaults.standard.stringArray(forKey: Self.orderKey) ?? []
@@ -239,28 +261,74 @@ class LaunchpadViewModel: ObservableObject {
 
     /// Klavyeyle seçili uygulama (nil = seçim yok)
     @Published var selectedPath: String?
-    private static let columnsPerPage = 7
 
     /// Sayfa değişince (Cmd+Ok, kaydırma, noktalar) klavye seçimi de yeni sayfada
     /// aynı konuma geçer; o konum boşsa sayfanın son uygulamasına
     private func moveSelectionToCurrentPage() {
         guard let path = selectedPath,
               let index = apps.firstIndex(where: { $0.path == path }),
-              index / Self.appsPerPage != currentPage else { return }
-        let slot = index % Self.appsPerPage
-        let newIndex = min(currentPage * Self.appsPerPage + slot, apps.count - 1)
+              index / appsPerPage != currentPage else { return }
+        let slot = index % appsPerPage
+        let newIndex = min(currentPage * appsPerPage + slot, apps.count - 1)
         selectedPath = apps[newIndex].path
     }
 
     func isMatch(_ app: AppItem) -> Bool {
-        searchText.isEmpty || app.name.localizedStandardContains(searchText)
+        if searchText.isEmpty { return true }
+        if app.isFolder { return utilityApps.contains { $0.name.localizedStandardContains(searchText) } }
+        return app.name.localizedStandardContains(searchText)
+    }
+
+    // MARK: - "Diğer" klasörü
+
+    func openFolder() {
+        guard !utilityApps.isEmpty else { return }
+        isEditing = false
+        withAnimation(.easeOut(duration: 0.2)) { isFolderOpen = true }
+    }
+
+    func closeFolder() {
+        withAnimation(.easeOut(duration: 0.2)) { isFolderOpen = false }
+    }
+
+    // MARK: - Ayarlar paneli
+
+    func openSettings() {
+        isEditing = false
+        isFolderOpen = false
+        withAnimation(.easeOut(duration: 0.2)) { isSettingsOpen = true }
+    }
+
+    func closeSettings() {
+        withAnimation(.easeOut(duration: 0.2)) { isSettingsOpen = false }
+    }
+
+    /// Kaydedilmiş simge sırasını siler, varsayılan sıraya döner
+    func resetOrder() {
+        UserDefaults.standard.removeObject(forKey: Self.orderKey)
+        loadApps()
+    }
+
+    /// Launchpad gizlenince klasör ve titreme modu kapansın (eski Launchpad'deki gibi)
+    private var hideObserver: NSObjectProtocol?
+    func setupHideObserver() {
+        guard hideObserver == nil else { return }
+        hideObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didHideNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.isFolderOpen = false
+                self?.isSettingsOpen = false
+                self?.isEditing = false
+            }
+        }
     }
 
     /// dx: sağ/sol (±1), dy: aşağı/yukarı (±1)
     func moveSelection(dx: Int, dy: Int) {
-        guard !apps.isEmpty, !isEditing else { return }
-        let perPage = Self.appsPerPage
-        let columns = Self.columnsPerPage
+        guard !apps.isEmpty, !isEditing, !isPanelOpen else { return }
+        let perPage = appsPerPage
+        let columns = settings.columns
 
         // İlk basışta bulunduğun sayfanın ilk uygulamasını seç
         guard let path = selectedPath,
@@ -286,16 +354,21 @@ class LaunchpadViewModel: ObservableObject {
 
     /// Return: seçili uygulamayı aç; arama yapılıyorsa seçili eşleşmiyorsa ilk eşleşeni aç
     func openSelected() {
-        guard !isEditing else { return }
+        guard !isEditing, !isPanelOpen else { return }
         let selected = apps.first(where: { $0.path == selectedPath })
         if let selected, isMatch(selected) {
             open(selected)
-        } else if !searchText.isEmpty, let first = apps.first(where: { isMatch($0) }) {
-            open(first)
+        } else if !searchText.isEmpty {
+            // Aramada ilk eşleşen gerçek uygulama (klasörün içindekiler dahil)
+            let candidates = apps.filter { !$0.isFolder } + utilityApps
+            if let first = candidates.first(where: { $0.name.localizedStandardContains(searchText) }) {
+                open(first)
+            }
         }
     }
 
     func open(_ app: AppItem) {
+        if app.isFolder { openFolder(); return }
         NSWorkspace.shared.open(URL(fileURLWithPath: app.path))
         LaunchpadPresenter.shared.hide()
     }
@@ -328,7 +401,6 @@ class LaunchpadViewModel: ObservableObject {
     // MARK: - Sürükleyerek yer değiştirme
 
     private static let orderKey = "AppOrder"
-    private static let appsPerPage = 35
 
     /// Şu an sürüklenen uygulamanın yolu (nil = sürükleme yok)
     @Published var draggingPath: String?
@@ -344,7 +416,7 @@ class LaunchpadViewModel: ObservableObject {
     private let reorderAnimation = Animation.spring(duration: 0.3, bounce: 0)
 
     func dragChanged(_ app: AppItem, start: CGPoint, location: CGPoint) {
-        guard searchText.isEmpty else { return }
+        guard searchText.isEmpty, !isPanelOpen else { return }
         if draggingPath == nil {
             guard let frame = iconFrames[app.path] else { return }
             isEditing = true
@@ -387,7 +459,7 @@ class LaunchpadViewModel: ObservableObject {
                   entry.value.insetBy(dx: entry.value.width * 0.2, dy: entry.value.height * 0.2).contains(location)
               })?.key,
               let to = apps.firstIndex(where: { $0.path == targetPath }),
-              to / Self.appsPerPage == currentPage else { return }
+              to / appsPerPage == currentPage else { return }
 
         withAnimation(reorderAnimation) {
             let item = apps.remove(at: from)
@@ -423,10 +495,10 @@ class LaunchpadViewModel: ObservableObject {
     private func moveDragged(toPage page: Int, atStart: Bool) {
         guard let dragging = draggingPath,
               let from = apps.firstIndex(where: { $0.path == dragging }),
-              from / Self.appsPerPage != page else { return }
+              from / appsPerPage != page else { return }
         var items = apps
         let item = items.remove(at: from)
-        let wanted = atStart ? page * Self.appsPerPage : page * Self.appsPerPage + Self.appsPerPage - 1
+        let wanted = atStart ? page * appsPerPage : page * appsPerPage + appsPerPage - 1
         items.insert(item, at: min(max(wanted, 0), items.count))
         withAnimation(reorderAnimation) { apps = items }
     }

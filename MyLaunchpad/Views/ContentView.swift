@@ -9,9 +9,7 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var vm = LaunchpadViewModel()
-    // static: görünümün içinde saklanan bir değer olmasın ki dışarıdaki
-    // animasyon (ölçek) değişirken SwiftUI bu ekranı "değişti" sanıp baştan çizmesin
-    static let columns = Array(repeating: GridItem(.flexible(), spacing: 20), count: 7)
+    @ObservedObject private var settings = SettingsStore.shared
     
     var body: some View {
         ZStack {
@@ -22,17 +20,39 @@ struct ContentView: View {
                 else if !vm.searchText.isEmpty { vm.searchText = "" }
                 else { LaunchpadPresenter.shared.hide() }
             }
+
+            // Sağ altta ayarlar düğmesi
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    Button(action: { vm.openSettings() }) {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 18))
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Ayarlar (Cmd+,)")
+                }
+            }
+            .padding(32)
             
             GeometryReader { geo in
-                let pages = vm.apps.chunked(into: 35)
+                let pages = vm.apps.chunked(into: settings.appsPerPage)
                 let safePage = min(max(0, vm.currentPage), max(0, pages.count - 1))
+                let columns = Array(repeating: GridItem(.flexible(), spacing: 20), count: settings.columns)
+                // Satır aralığı ekran yüksekliğine göre: satır sayısı ya da simge boyutu artınca ekrana sığsın
+                let cellHeight = settings.iconSize + 12 + 36
+                let available = geo.size.height - 180
+                let rowCount = CGFloat(settings.rows)
+                let rowSpacing = max(12, min(60, (available - rowCount * cellHeight) / max(rowCount - 1, 1)))
                 
                 HStack(spacing: 0) {
                     ForEach(Array(pages.enumerated()), id: \.offset) { idx, pageApps in
-                        LazyVGrid(columns: Self.columns, spacing: 40) {
+                        LazyVGrid(columns: columns, spacing: rowSpacing) {
                             ForEach(pageApps) { app in
-                                let match = vm.searchText.isEmpty || app.name.localizedStandardContains(vm.searchText)
-                                AppIconView(app: app, match: match, vm: vm)
+                                let match = vm.isMatch(app)
+                                AppIconView(app: app, match: match, vm: vm, iconSize: settings.iconSize)
                             }
                         }
                         .padding(.top, 90).padding(.horizontal, 80).frame(width: geo.size.width, height: geo.size.height, alignment: .top).id(idx)
@@ -47,13 +67,15 @@ struct ContentView: View {
             VStack {
                 HStack { Image(systemName: "magnifyingglass"); TextField("Ara", text: $vm.searchText).textFieldStyle(.plain) }.padding(10).background(Color.black.opacity(0.2)).cornerRadius(12).frame(width: 320).padding(.top, 40)
                 Spacer()
-                let pageCount = max(1, vm.apps.chunked(into: 35).count)
+                let pageCount = max(1, vm.apps.chunked(into: settings.appsPerPage).count)
                 HStack { ForEach(0..<pageCount, id: \.self) { i in Circle().fill(vm.currentPage == i ? .white : .white.opacity(0.3)).frame(width: 8, height: 8).onTapGesture { vm.goToPage(i) } } }.padding(.bottom, 40)
             }
             
             Group {
                 Button(action: {
                     if vm.isEditing { vm.isEditing = false }
+                    else if vm.isSettingsOpen { vm.closeSettings() }
+                    else if vm.isFolderOpen { vm.closeFolder() }
                     else if !vm.searchText.isEmpty { vm.searchText = "" }
                     else { LaunchpadPresenter.shared.hide() }
                 }) { EmptyView() }.keyboardShortcut(.escape, modifiers: [])
@@ -78,10 +100,24 @@ struct ContentView: View {
                 Button(action: { vm.turnPage(direction: -1) }) { EmptyView() }
                     .keyboardShortcut(.leftArrow, modifiers: .command)
 
+                // Cmd+,: ayarlar
+                Button(action: { vm.openSettings() }) { EmptyView() }
+                    .keyboardShortcut(",", modifiers: .command)
+
                 // Cmd+Q: uygulamayı tamamen kapat (güncelleme yaparken lazım)
                 Button(action: { NSApp.terminate(nil) }) { EmptyView() }
                     .keyboardShortcut("q", modifiers: .command)
             }.opacity(0)
+        }
+        .overlay {
+            if vm.isFolderOpen {
+                FolderPanelView(vm: vm)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
+            if vm.isSettingsOpen {
+                SettingsPanelView(vm: vm)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
         }
         .overlay { DraggedIconOverlay(vm: vm, overlay: vm.dragOverlay) }
         .coordinateSpace(.named("launchpad"))
@@ -90,8 +126,11 @@ struct ContentView: View {
             vm.setupMonitor()
             vm.startWatchingAppFolders()
             vm.setupOptionKeyMonitor()
+            vm.setupHideObserver()
         }
         .onDisappear { vm.cleanup() }
+        // Sütun/satır değişince sayfa sayısı değişir; bulunduğun sayfa geçerli kalsın
+        .onChange(of: settings.appsPerPage) { _, _ in vm.goToPage(vm.currentPage) }
     }
 }
 
@@ -102,22 +141,76 @@ struct DraggedIconOverlay: View {
 
     var body: some View {
         if let path = vm.draggingPath, let app = vm.apps.first(where: { $0.path == path }) {
+            let size = SettingsStore.shared.iconSize
             VStack(spacing: 12) {
-                Image(nsImage: app.icon)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 80, height: 80)
+                Group {
+                    if app.isFolder {
+                        FolderIconView(apps: Array(vm.utilityApps.prefix(9)), size: size)
+                    } else {
+                        Image(nsImage: app.icon).resizable().scaledToFit()
+                    }
+                }
+                .frame(width: size, height: size)
                 Text(app.name)
                     .font(.system(size: 14))
                     .foregroundColor(.white)
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
             }
-            .frame(width: 100)
+            .frame(width: size + 20)
             .scaleEffect(1.1)
             .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
             .position(overlay.position)
             .allowsHitTesting(false)
+        }
+    }
+}
+
+/// "Diğer" klasörü açılınca ortada beliren panel
+struct FolderPanelView: View {
+    @ObservedObject var vm: LaunchpadViewModel
+    private let columns = Array(repeating: GridItem(.fixed(110), spacing: 20), count: 6)
+
+    var body: some View {
+        ZStack {
+            // Panelin dışına tıklayınca kapanır
+            Color.black.opacity(0.35)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture { vm.closeFolder() }
+
+            VStack(spacing: 24) {
+                Text(LaunchpadViewModel.utilitiesFolderName)
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundColor(.white)
+
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 30) {
+                        ForEach(vm.utilityApps) { app in
+                            VStack(spacing: 10) {
+                                Image(nsImage: app.icon)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 72, height: 72)
+                                Text(app.name)
+                                    .font(.system(size: 13))
+                                    .foregroundColor(.white)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .frame(width: 110)
+                            .opacity(vm.searchText.isEmpty || app.name.localizedStandardContains(vm.searchText) ? 1 : 0.25)
+                            .contentShape(Rectangle())
+                            .onTapGesture { vm.open(app) }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .frame(maxHeight: 520)
+            }
+            .padding(36)
+            .frame(width: 820)
+            .background(RoundedRectangle(cornerRadius: 28).fill(.ultraThinMaterial))
         }
     }
 }
