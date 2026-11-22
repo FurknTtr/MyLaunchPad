@@ -24,6 +24,12 @@ class LaunchpadViewModel: ObservableObject {
         }
     }
     @Published var isEditing = false
+    /// "Diğer" klasörünün içindekiler (Yardımcı Programlar) ve paneli açık mı
+    @Published var utilityApps: [AppItem] = []
+    @Published var isFolderOpen = false
+    static let utilitiesFolderName = "Diğer"
+    static let utilitiesFolderPath = "folder://utilities"
+    private static let utilitiesDirectory = "/System/Applications/Utilities/"
     @Published var searchText = ""
     @Published var dragOffset: CGFloat = 0
     
@@ -68,6 +74,7 @@ class LaunchpadViewModel: ObservableObject {
     }
 
     private func handleScroll(_ event: NSEvent) {
+        if isFolderOpen { return }
         // Parmak kalktıktan sonra macOS'un gönderdiği "momentum" olaylarını yok say:
         // sayfa zaten parmağın kalktığı anda yerine oturmaya başladı.
         if !event.momentumPhase.isEmpty { return }
@@ -222,7 +229,19 @@ class LaunchpadViewModel: ObservableObject {
                 }
             }
         }
-        let defaultOrder = loaded.sorted { $0.isSystemApp != $1.isSystemApp ? $0.isSystemApp : ($0.isSystemApp ? $0.name < $1.name : $0.creationDate < $1.creationDate) }
+        // Yardımcı Programlar ayrı tutulur, ızgarada tek bir "Diğer" klasörü olarak görünür
+        let utilities = loaded.filter { $0.path.hasPrefix(Self.utilitiesDirectory) }
+        let mainApps = loaded.filter { !$0.path.hasPrefix(Self.utilitiesDirectory) }
+        self.utilityApps = utilities.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+
+        var defaultOrder = mainApps.sorted { $0.isSystemApp != $1.isSystemApp ? $0.isSystemApp : ($0.isSystemApp ? $0.name < $1.name : $0.creationDate < $1.creationDate) }
+        if !utilities.isEmpty {
+            let folder = AppItem(name: Self.utilitiesFolderName, path: Self.utilitiesFolderPath,
+                                 icon: NSImage(), creationDate: .distantPast, isSystemApp: true, isFolder: true)
+            // Varsayılan yeri: sistem uygulamalarının hemen arkası
+            let index = defaultOrder.firstIndex(where: { !$0.isSystemApp }) ?? defaultOrder.count
+            defaultOrder.insert(folder, at: index)
+        }
 
         // Kullanıcının kaydettiği sıra varsa onu kullan; yeni uygulamalar sona eklenir
         let saved = UserDefaults.standard.stringArray(forKey: Self.orderKey) ?? []
@@ -253,12 +272,40 @@ class LaunchpadViewModel: ObservableObject {
     }
 
     func isMatch(_ app: AppItem) -> Bool {
-        searchText.isEmpty || app.name.localizedStandardContains(searchText)
+        if searchText.isEmpty { return true }
+        if app.isFolder { return utilityApps.contains { $0.name.localizedStandardContains(searchText) } }
+        return app.name.localizedStandardContains(searchText)
+    }
+
+    // MARK: - "Diğer" klasörü
+
+    func openFolder() {
+        guard !utilityApps.isEmpty else { return }
+        isEditing = false
+        withAnimation(.easeOut(duration: 0.2)) { isFolderOpen = true }
+    }
+
+    func closeFolder() {
+        withAnimation(.easeOut(duration: 0.2)) { isFolderOpen = false }
+    }
+
+    /// Launchpad gizlenince klasör ve titreme modu kapansın (eski Launchpad'deki gibi)
+    private var hideObserver: NSObjectProtocol?
+    func setupHideObserver() {
+        guard hideObserver == nil else { return }
+        hideObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didHideNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.isFolderOpen = false
+                self?.isEditing = false
+            }
+        }
     }
 
     /// dx: sağ/sol (±1), dy: aşağı/yukarı (±1)
     func moveSelection(dx: Int, dy: Int) {
-        guard !apps.isEmpty, !isEditing else { return }
+        guard !apps.isEmpty, !isEditing, !isFolderOpen else { return }
         let perPage = Self.appsPerPage
         let columns = Self.columnsPerPage
 
@@ -286,16 +333,21 @@ class LaunchpadViewModel: ObservableObject {
 
     /// Return: seçili uygulamayı aç; arama yapılıyorsa seçili eşleşmiyorsa ilk eşleşeni aç
     func openSelected() {
-        guard !isEditing else { return }
+        guard !isEditing, !isFolderOpen else { return }
         let selected = apps.first(where: { $0.path == selectedPath })
         if let selected, isMatch(selected) {
             open(selected)
-        } else if !searchText.isEmpty, let first = apps.first(where: { isMatch($0) }) {
-            open(first)
+        } else if !searchText.isEmpty {
+            // Aramada ilk eşleşen gerçek uygulama (klasörün içindekiler dahil)
+            let candidates = apps.filter { !$0.isFolder } + utilityApps
+            if let first = candidates.first(where: { $0.name.localizedStandardContains(searchText) }) {
+                open(first)
+            }
         }
     }
 
     func open(_ app: AppItem) {
+        if app.isFolder { openFolder(); return }
         NSWorkspace.shared.open(URL(fileURLWithPath: app.path))
         LaunchpadPresenter.shared.hide()
     }
@@ -344,7 +396,7 @@ class LaunchpadViewModel: ObservableObject {
     private let reorderAnimation = Animation.spring(duration: 0.3, bounce: 0)
 
     func dragChanged(_ app: AppItem, start: CGPoint, location: CGPoint) {
-        guard searchText.isEmpty else { return }
+        guard searchText.isEmpty, !isFolderOpen else { return }
         if draggingPath == nil {
             guard let frame = iconFrames[app.path] else { return }
             isEditing = true

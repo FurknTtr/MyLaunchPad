@@ -31,7 +31,7 @@ struct ContentView: View {
                     ForEach(Array(pages.enumerated()), id: \.offset) { idx, pageApps in
                         LazyVGrid(columns: Self.columns, spacing: 40) {
                             ForEach(pageApps) { app in
-                                let match = vm.searchText.isEmpty || app.name.localizedStandardContains(vm.searchText)
+                                let match = vm.isMatch(app)
                                 AppIconView(app: app, match: match, vm: vm)
                             }
                         }
@@ -54,6 +54,7 @@ struct ContentView: View {
             Group {
                 Button(action: {
                     if vm.isEditing { vm.isEditing = false }
+                    else if vm.isFolderOpen { vm.closeFolder() }
                     else if !vm.searchText.isEmpty { vm.searchText = "" }
                     else { LaunchpadPresenter.shared.hide() }
                 }) { EmptyView() }.keyboardShortcut(.escape, modifiers: [])
@@ -83,6 +84,12 @@ struct ContentView: View {
                     .keyboardShortcut("q", modifiers: .command)
             }.opacity(0)
         }
+        .overlay {
+            if vm.isFolderOpen {
+                FolderPanelView(vm: vm)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
+        }
         .overlay { DraggedIconOverlay(vm: vm, overlay: vm.dragOverlay) }
         .coordinateSpace(.named("launchpad"))
         .onAppear {
@@ -90,6 +97,7 @@ struct ContentView: View {
             vm.setupMonitor()
             vm.startWatchingAppFolders()
             vm.setupOptionKeyMonitor()
+            vm.setupHideObserver()
         }
         .onDisappear { vm.cleanup() }
     }
@@ -118,6 +126,55 @@ struct DraggedIconOverlay: View {
             .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
             .position(overlay.position)
             .allowsHitTesting(false)
+        }
+    }
+}
+
+/// "Diğer" klasörü açılınca ortada beliren panel
+struct FolderPanelView: View {
+    @ObservedObject var vm: LaunchpadViewModel
+    private let columns = Array(repeating: GridItem(.fixed(110), spacing: 20), count: 6)
+
+    var body: some View {
+        ZStack {
+            // Panelin dışına tıklayınca kapanır
+            Color.black.opacity(0.35)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture { vm.closeFolder() }
+
+            VStack(spacing: 24) {
+                Text(LaunchpadViewModel.utilitiesFolderName)
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundColor(.white)
+
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 30) {
+                        ForEach(vm.utilityApps) { app in
+                            VStack(spacing: 10) {
+                                Image(nsImage: app.icon)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 72, height: 72)
+                                Text(app.name)
+                                    .font(.system(size: 13))
+                                    .foregroundColor(.white)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .frame(width: 110)
+                            .opacity(vm.searchText.isEmpty || app.name.localizedStandardContains(vm.searchText) ? 1 : 0.25)
+                            .contentShape(Rectangle())
+                            .onTapGesture { vm.open(app) }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .frame(maxHeight: 520)
+            }
+            .padding(36)
+            .frame(width: 820)
+            .background(RoundedRectangle(cornerRadius: 28).fill(.ultraThinMaterial))
         }
     }
 }

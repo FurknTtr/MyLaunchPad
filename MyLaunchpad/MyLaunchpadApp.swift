@@ -82,6 +82,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    // Cmd+Tab ya da başka bir uygulamaya tıklayınca Launchpad kapansın (eski Launchpad'deki gibi)
+    func applicationDidResignActive(_ notification: Notification) {
+        LaunchpadPresenter.shared.hide()
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false // Pencere kapansa bile arka planda yaşa
     }

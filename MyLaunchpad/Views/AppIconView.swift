@@ -17,9 +17,7 @@ struct AppIconView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             VStack(spacing: 12) {
-                Image(nsImage: app.icon)
-                    .resizable()
-                    .scaledToFit()
+                iconContent
                     .frame(width: 80, height: 80)
                     // Klavyeyle seçiliyse simgenin arkasında hafif bir vurgu (yerleşimi değiştirmez)
                     .background {
@@ -58,7 +56,7 @@ struct AppIconView: View {
             }
             .onTapGesture {
                 if !vm.isEditing && match {
-                    vm.open(app)
+                    vm.open(app) // klasörse paneli açar
                 }
             }
             
@@ -85,4 +83,36 @@ struct AppIconView: View {
             vm.iconFrames[app.path] = frame
         }
     }
+
+    @ViewBuilder private var iconContent: some View {
+        if app.isFolder {
+            FolderIconView(apps: Array(vm.utilityApps.prefix(9)))
+        } else {
+            Image(nsImage: app.icon)
+                .resizable()
+                .scaledToFit()
+        }
+    }
 }
+
+/// Klasör simgesi: içindeki ilk 9 uygulamanın mini ızgarası
+struct FolderIconView: View {
+    let apps: [AppItem]
+    private let columns = Array(repeating: GridItem(.fixed(18), spacing: 4), count: 3)
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 18)
+            .fill(Color.white.opacity(0.2))
+            .overlay {
+                LazyVGrid(columns: columns, spacing: 4) {
+                    ForEach(apps) { app in
+                        Image(nsImage: app.icon)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 18, height: 18)
+                    }
+                }
+            }
+    }
+}
+

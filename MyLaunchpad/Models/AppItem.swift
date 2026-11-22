@@ -18,6 +18,8 @@ struct AppItem: Identifiable {
     let icon: NSImage
     let creationDate: Date
     let isSystemApp: Bool
+    /// Gerçek bir uygulama değil, "Diğer" klasörünün simgesi
+    var isFolder: Bool = false
 }
 
 extension Array {
