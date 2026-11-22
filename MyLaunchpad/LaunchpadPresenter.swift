@@ -27,7 +27,7 @@ final class LaunchpadPresenter: ObservableObject {
     // Bırakınca tamamlama kararı
     private let commitProgress: CGFloat = 0.4 // en az bu kadar ilerlediyse tamamla
     private let flickVelocity: Float = 1.0    // ya da bu hızda hızlı bir hareketse
-    private let animationDuration: TimeInterval = 0.25
+    private let animationDuration: TimeInterval = 0.3
 
     private var isShown = false
     private var gestureActive = false
@@ -160,20 +160,13 @@ final class LaunchpadPresenter: ObservableObject {
     }
 }
 
-/// Ekranın tamamını saran kök görünüm: sadece ölçeği değiştirir,
-/// böylece animasyon sırasında simge ızgarası baştan hesaplanmaz.
+/// Ekranın tamamını saran kök görünüm: animasyon sırasında sadece ölçeği değiştirir.
+/// ContentView'un dışarıdan aldığı bir değer olmadığı için SwiftUI onu baştan çizmez.
 struct LaunchpadRoot: View {
     @ObservedObject var presenter: LaunchpadPresenter
 
     var body: some View {
         ContentView()
-            .equatable() // ölçek değişirken ızgara baştan hesaplanmasın
             .scaleEffect(1 + (1 - presenter.progress) * LaunchpadPresenter.hiddenScaleBoost)
     }
-}
-
-extension ContentView: Equatable {
-    // ContentView dışarıdan veri almıyor; kendi durumu (@StateObject) değişince
-    // SwiftUI onu yine günceller. Bu yüzden dışarıdan bakınca hep "aynı".
-    nonisolated static func == (lhs: ContentView, rhs: ContentView) -> Bool { true }
 }

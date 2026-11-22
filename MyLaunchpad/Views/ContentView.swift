@@ -9,7 +9,9 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var vm = LaunchpadViewModel()
-    let columns = Array(repeating: GridItem(.flexible(), spacing: 20), count: 7)
+    // static: görünümün içinde saklanan bir değer olmasın ki dışarıdaki
+    // animasyon (ölçek) değişirken SwiftUI bu ekranı "değişti" sanıp baştan çizmesin
+    static let columns = Array(repeating: GridItem(.flexible(), spacing: 20), count: 7)
     
     var body: some View {
         ZStack {
@@ -27,7 +29,7 @@ struct ContentView: View {
                 
                 HStack(spacing: 0) {
                     ForEach(Array(pages.enumerated()), id: \.offset) { idx, pageApps in
-                        LazyVGrid(columns: columns, spacing: 40) {
+                        LazyVGrid(columns: Self.columns, spacing: 40) {
                             ForEach(pageApps) { app in
                                 let match = vm.searchText.isEmpty || app.name.localizedStandardContains(vm.searchText)
                                 AppIconView(app: app, match: match, vm: vm)
