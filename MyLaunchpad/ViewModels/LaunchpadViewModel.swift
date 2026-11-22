@@ -34,8 +34,11 @@ class LaunchpadViewModel: ObservableObject {
 
     // Sayfa değiştirme eşikleri
     private let distanceThreshold: CGFloat = 0.3   // sayfa genişliğinin %30'u kadar sürükleyince
-    private let flickVelocity: CGFloat = 400       // ya da bu hızdan hızlı fırlatınca (nokta/sn)
+    private let flickVelocity: CGFloat = 1500      // ya da bu hızdan hızlı fırlatınca (nokta/sn, büyütülmüş)
     private let edgeResistance: CGFloat = 0.3      // ilk/son sayfada lastik efekti
+    /// Trackpad küçük, ekran büyük: parmak hareketi bu kadar büyütülür
+    /// (trackpad'i baştan sona kaydırmak ≈ bir sayfa)
+    private let dragMultiplier: CGFloat = 3.5
 
     private var pageCount: Int { max(1, apps.chunked(into: 35).count) }
 
@@ -62,8 +65,10 @@ class LaunchpadViewModel: ObservableObject {
             return
         }
 
-        let dx = event.scrollingDeltaX
-        let isHorizontal = abs(dx) > abs(event.scrollingDeltaY)
+        let rawDX = event.scrollingDeltaX
+        let isHorizontal = abs(rawDX) > abs(event.scrollingDeltaY)
+        // Fare tekerleği (phase yok) zaten büyük adımlarla gelir, onu büyütme
+        let dx = event.phase.isEmpty ? rawDX : rawDX * dragMultiplier
         guard isDragging || isHorizontal, dx != 0 else { return }
 
         // Parmak hızını ölç (yumuşatılmış)

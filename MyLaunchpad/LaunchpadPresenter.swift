@@ -27,7 +27,7 @@ final class LaunchpadPresenter: ObservableObject {
     // Bırakınca tamamlama kararı
     private let commitProgress: CGFloat = 0.4 // en az bu kadar ilerlediyse tamamla
     private let flickVelocity: Float = 1.0    // ya da bu hızda hızlı bir hareketse
-    private let animationDuration: TimeInterval = 0.3
+    private let animationDuration: TimeInterval = 0.35
 
     private var isShown = false
     private var gestureActive = false
