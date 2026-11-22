@@ -1,5 +1,7 @@
 import SwiftUI
 import AppKit
+import CoreServices
+import ServiceManagement
 
 @main
 struct MyLaunchpadApp: App {
@@ -9,6 +11,8 @@ struct MyLaunchpadApp: App {
         // Asıl tam ekran pencereyi AppDelegate kendisi oluşturuyor
         // (klavye alabilen özel pencere). Burada boş bir sahne yeterli.
         Settings { EmptyView() }
+            // Ayarlar Launchpad'in içinde açılıyor; macOS'un boş Ayarlar penceresi çıkmasın
+            .commands { CommandGroup(replacing: .appSettings) {} }
     }
 }
 
@@ -23,10 +27,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var iconCache: [String: NSImage] = [:]
     private var window: LaunchpadWindow?
 
+    private var launchedAtLogin = false
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        launchedAtLogin = Self.isLaunchedAtLogin()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         createWindow()
-        LaunchpadPresenter.shared.show()
+        // Mac açılışında sessizce arka planda başla; elle açınca Launchpad görünsün
+        if !launchedAtLogin {
+            LaunchpadPresenter.shared.show()
+        }
 
         // Arka planda ikonları önceden yükle
         DispatchQueue.global(qos: .background).async {
@@ -51,6 +64,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ) { _ in
             GestureMonitor.shared.restart()
         }
+    }
+
+    /// Uygulama giriş öğesi olarak mı (Mac açılınca) başlatıldı?
+    private static func isLaunchedAtLogin() -> Bool {
+        if let event = NSAppleEventManager.shared().currentAppleEvent,
+           event.eventID == AEEventID(kAEOpenApplication),
+           event.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue == OSType(keyAELaunchedAsLogInItem) {
+            return true
+        }
+        // Yedek kontrol: "Mac açılınca başlat" açıksa ve Mac yeni açıldıysa (ilk 2 dakika)
+        return SMAppService.mainApp.status == .enabled && ProcessInfo.processInfo.systemUptime < 120
     }
 
     private func createWindow() {

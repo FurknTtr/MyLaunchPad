@@ -12,13 +12,14 @@ struct AppIconView: View {
     let app: AppItem
     let match: Bool
     @ObservedObject var vm: LaunchpadViewModel
+    var iconSize: Double = SettingsStore.Default.iconSize
     @State private var isHoveringX = false
     
     var body: some View {
         ZStack(alignment: .topLeading) {
             VStack(spacing: 12) {
                 iconContent
-                    .frame(width: 80, height: 80)
+                    .frame(width: iconSize, height: iconSize)
                     // Klavyeyle seçiliyse simgenin arkasında hafif bir vurgu (yerleşimi değiştirmez)
                     .background {
                         RoundedRectangle(cornerRadius: 18)
@@ -34,7 +35,7 @@ struct AppIconView: View {
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
             }
-            .frame(width: 100)
+            .frame(width: iconSize + 20)
             .opacity(match ? 1 : 0.2)
             .grayscale(match ? 0 : 1)
             .contentShape(Rectangle())
@@ -86,7 +87,7 @@ struct AppIconView: View {
 
     @ViewBuilder private var iconContent: some View {
         if app.isFolder {
-            FolderIconView(apps: Array(vm.utilityApps.prefix(9)))
+            FolderIconView(apps: Array(vm.utilityApps.prefix(9)), size: iconSize)
         } else {
             Image(nsImage: app.icon)
                 .resizable()
@@ -98,18 +99,21 @@ struct AppIconView: View {
 /// Klasör simgesi: içindeki ilk 9 uygulamanın mini ızgarası
 struct FolderIconView: View {
     let apps: [AppItem]
-    private let columns = Array(repeating: GridItem(.fixed(18), spacing: 4), count: 3)
+    var size: Double = 80
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 18)
+        // Simge boyutuna göre ölçeklenen 3×3 mini ızgara
+        let mini = size * 0.225
+        let gap = size * 0.05
+        RoundedRectangle(cornerRadius: size * 0.225)
             .fill(Color.white.opacity(0.2))
             .overlay {
-                LazyVGrid(columns: columns, spacing: 4) {
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(mini), spacing: gap), count: 3), spacing: gap) {
                     ForEach(apps) { app in
                         Image(nsImage: app.icon)
                             .resizable()
                             .scaledToFit()
-                            .frame(width: 18, height: 18)
+                            .frame(width: mini, height: mini)
                     }
                 }
             }
