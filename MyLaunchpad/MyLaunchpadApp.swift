@@ -43,11 +43,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let window = NSApplication.shared.windows.first {
             window.makeKeyAndOrderFront(nil)
         }
-        NSApp.activate()
+        // Arka plandaki (accessory) bir uygulamanın öne gelmesi için zorla etkinleştir;
+        // yeni NSApp.activate() başka uygulama öndeyken etkinleştirmeyi reddedebiliyor.
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func hideLaunchpad() {
-        guard NSApp.isActive, !NSApp.isHidden else { return }
+        // Uygulamanın "aktif" sayılmasına bakmadan, pencere ekrandaysa gizle
+        guard !NSApp.isHidden,
+              let window = NSApplication.shared.windows.first,
+              window.isVisible else { return }
         NSApp.hide(nil)
     }
 

@@ -46,7 +46,7 @@ nonisolated final class GestureMonitor: @unchecked Sendable {
     // Hareket eşikleri
     private static let minFingers = 4
     private static let pinchInRatio: Float = 0.65   // parmaklar başlangıca göre %35 yaklaşınca
-    private static let pinchOutRatio: Float = 1.5   // parmaklar başlangıca göre %50 açılınca
+    private static let pinchOutRatio: Float = 1.4   // parmaklar başlangıca göre %40 açılınca
     private static let minStartSpread: Float = 0.02
 
     // Hareket durumu (yalnızca MultitouchSupport'un callback thread'inden kullanılır)
