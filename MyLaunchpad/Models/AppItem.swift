@@ -10,7 +10,9 @@ import Foundation
 import AppKit
 
 struct AppItem: Identifiable {
-    let id = UUID()
+    // Kimlik olarak dosya yolu: liste yenilendiğinde mevcut simgeler
+    // baştan çizilmez, sadece eklenen/silinen değişir
+    var id: String { path }
     let name: String
     let path: String
     let icon: NSImage
