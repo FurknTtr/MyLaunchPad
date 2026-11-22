@@ -21,6 +21,12 @@ struct AppIconView: View {
                     .resizable()
                     .scaledToFit()
                     .frame(width: 80, height: 80)
+                    // Klavyeyle seçiliyse simgenin arkasında hafif bir vurgu (yerleşimi değiştirmez)
+                    .background {
+                        RoundedRectangle(cornerRadius: 18)
+                            .fill(Color.white.opacity(vm.selectedPath == app.path ? 0.25 : 0))
+                            .padding(-8)
+                    }
                     .rotationEffect(.degrees(vm.isEditing && match ? 2.5 : 0))
                     .animation(vm.isEditing && match ? .linear(duration: 0.12).repeatForever(autoreverses: true) : .default, value: vm.isEditing)
                 
@@ -52,8 +58,7 @@ struct AppIconView: View {
             }
             .onTapGesture {
                 if !vm.isEditing && match {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: app.path))
-                    LaunchpadPresenter.shared.hide()
+                    vm.open(app)
                 }
             }
             

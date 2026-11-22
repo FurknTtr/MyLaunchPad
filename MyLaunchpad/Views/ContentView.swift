@@ -58,11 +58,25 @@ struct ContentView: View {
                     else { LaunchpadPresenter.shared.hide() }
                 }) { EmptyView() }.keyboardShortcut(.escape, modifiers: [])
                 
-                Button(action: { vm.turnPage(direction: 1) }) { EmptyView() }
+                // Ok tuşları: uygulamalar arasında gezin
+                Button(action: { vm.moveSelection(dx: 1, dy: 0) }) { EmptyView() }
                     .keyboardShortcut(.rightArrow, modifiers: [])
-
-                Button(action: { vm.turnPage(direction: -1) }) { EmptyView() }
+                Button(action: { vm.moveSelection(dx: -1, dy: 0) }) { EmptyView() }
                     .keyboardShortcut(.leftArrow, modifiers: [])
+                Button(action: { vm.moveSelection(dx: 0, dy: 1) }) { EmptyView() }
+                    .keyboardShortcut(.downArrow, modifiers: [])
+                Button(action: { vm.moveSelection(dx: 0, dy: -1) }) { EmptyView() }
+                    .keyboardShortcut(.upArrow, modifiers: [])
+
+                // Return: seçili (ya da aramada ilk eşleşen) uygulamayı aç
+                Button(action: { vm.openSelected() }) { EmptyView() }
+                    .keyboardShortcut(.return, modifiers: [])
+
+                // Cmd+Sol/Sağ Ok: sayfa değiştir
+                Button(action: { vm.turnPage(direction: 1) }) { EmptyView() }
+                    .keyboardShortcut(.rightArrow, modifiers: .command)
+                Button(action: { vm.turnPage(direction: -1) }) { EmptyView() }
+                    .keyboardShortcut(.leftArrow, modifiers: .command)
 
                 // Cmd+Q: uygulamayı tamamen kapat (güncelleme yaparken lazım)
                 Button(action: { NSApp.terminate(nil) }) { EmptyView() }
@@ -75,6 +89,7 @@ struct ContentView: View {
             vm.loadApps()
             vm.setupMonitor()
             vm.startWatchingAppFolders()
+            vm.setupOptionKeyMonitor()
         }
         .onDisappear { vm.cleanup() }
     }

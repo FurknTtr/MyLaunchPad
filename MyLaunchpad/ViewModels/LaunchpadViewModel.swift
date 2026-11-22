@@ -156,6 +156,7 @@ class LaunchpadViewModel: ObservableObject {
     
     func cleanup() {
         if let monitor = scrollMonitor { NSEvent.removeMonitor(monitor); scrollMonitor = nil }
+        if let monitor = optionMonitor { NSEvent.removeMonitor(monitor); optionMonitor = nil }
         folderWatchers.forEach { $0.cancel() }
         folderWatchers.removeAll()
     }
@@ -228,6 +229,85 @@ class LaunchpadViewModel: ObservableObject {
             let byPath = Dictionary(defaultOrder.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
             let known = Set(saved)
             self.apps = saved.compactMap { byPath[$0] } + defaultOrder.filter { !known.contains($0.path) }
+        }
+    }
+
+    // MARK: - Klavye: ok tuşlarıyla gezinme, Return ile açma
+
+    /// Klavyeyle seçili uygulama (nil = seçim yok)
+    @Published var selectedPath: String?
+    private static let columnsPerPage = 7
+
+    func isMatch(_ app: AppItem) -> Bool {
+        searchText.isEmpty || app.name.localizedStandardContains(searchText)
+    }
+
+    /// dx: sağ/sol (±1), dy: aşağı/yukarı (±1)
+    func moveSelection(dx: Int, dy: Int) {
+        guard !apps.isEmpty, !isEditing else { return }
+        let perPage = Self.appsPerPage
+        let columns = Self.columnsPerPage
+
+        // İlk basışta bulunduğun sayfanın ilk uygulamasını seç
+        guard let path = selectedPath,
+              let index = apps.firstIndex(where: { $0.path == path }) else {
+            selectedPath = apps[min(currentPage * perPage, apps.count - 1)].path
+            return
+        }
+
+        var newIndex = index + dx
+        if dy != 0 {
+            let row = (index % perPage) / columns
+            let newRow = row + dy
+            // Sayfanın içinde kal; sayfa değiştirmek için sağ/sol ya da Cmd+Ok
+            if newRow >= 0, newRow < perPage / columns { newIndex = index + dy * columns }
+        }
+        newIndex = min(max(newIndex, 0), apps.count - 1)
+        selectedPath = apps[newIndex].path
+
+        // Seçim başka sayfaya geçtiyse o sayfayı göster
+        let page = newIndex / perPage
+        if page != currentPage { goToPage(page) }
+    }
+
+    /// Return: seçili uygulamayı aç; arama yapılıyorsa seçili eşleşmiyorsa ilk eşleşeni aç
+    func openSelected() {
+        guard !isEditing else { return }
+        let selected = apps.first(where: { $0.path == selectedPath })
+        if let selected, isMatch(selected) {
+            open(selected)
+        } else if !searchText.isEmpty, let first = apps.first(where: { isMatch($0) }) {
+            open(first)
+        }
+    }
+
+    func open(_ app: AppItem) {
+        NSWorkspace.shared.open(URL(fileURLWithPath: app.path))
+        LaunchpadPresenter.shared.hide()
+    }
+
+    // MARK: - Option tuşu: basılı tutarken titreme modu
+
+    private var optionMonitor: Any?
+    private var optionStartedEditing = false
+
+    func setupOptionKeyMonitor() {
+        guard optionMonitor == nil else { return }
+        optionMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.handleModifiers(event.modifierFlags)
+            return event
+        }
+    }
+
+    private func handleModifiers(_ flags: NSEvent.ModifierFlags) {
+        let optionDown = flags.contains(.option)
+        if optionDown, !isEditing, searchText.isEmpty {
+            optionStartedEditing = true
+            isEditing = true
+        } else if !optionDown, optionStartedEditing {
+            // Option ile başladıysa bırakınca biter; o sırada sürükleme varsa titreme sürer
+            optionStartedEditing = false
+            if draggingPath == nil { isEditing = false }
         }
     }
 
