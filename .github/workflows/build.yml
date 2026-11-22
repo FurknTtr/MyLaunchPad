@@ -1,0 +1,35 @@
+name: Build MyLaunchpad
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode version
+        run: xcodebuild -version
+
+      - name: Build (ad-hoc signed)
+        run: |
+          xcodebuild \
+            -project MyLaunchpad.xcodeproj \
+            -target MyLaunchpad \
+            -configuration Release \
+            SYMROOT="$PWD/build" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="-" \
+            DEVELOPMENT_TEAM="" \
+            build
+
+      - name: Zip app
+        run: ditto -c -k --keepParent build/Release/MyLaunchpad.app MyLaunchpad.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MyLaunchpad
+          path: MyLaunchpad.zip
