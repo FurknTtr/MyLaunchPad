@@ -22,7 +22,11 @@ class LaunchpadViewModel: ObservableObject {
     var pageWidth: CGFloat = 1440
 
     /// Klavye ve sayfa noktaları için standart sayfa geçişi (zıplamasız yay)
-    static let pageAnimation = Animation.spring(duration: 0.4, bounce: 0)
+    static let pageAnimation = Animation.spring(duration: 0.5, bounce: 0)
+    /// Parmağı bırakınca sayfanın yerine oturma süresi
+    private let snapDuration: TimeInterval = 0.55
+    /// Bırakınca devralınan hızın üst sınırı (yükseldikçe sayfa "fırlar")
+    private let maxSnapVelocity: Double = 3
 
     private var scrollMonitor: Any?
     private var snapWorkItem: DispatchWorkItem?
@@ -34,11 +38,11 @@ class LaunchpadViewModel: ObservableObject {
 
     // Sayfa değiştirme eşikleri
     private let distanceThreshold: CGFloat = 0.3   // sayfa genişliğinin %30'u kadar sürükleyince
-    private let flickVelocity: CGFloat = 1500      // ya da bu hızdan hızlı fırlatınca (nokta/sn, büyütülmüş)
+    private let flickVelocity: CGFloat = 1000      // ya da bu hızdan hızlı fırlatınca (nokta/sn, büyütülmüş)
     private let edgeResistance: CGFloat = 0.3      // ilk/son sayfada lastik efekti
     /// Trackpad küçük, ekran büyük: parmak hareketi bu kadar büyütülür
     /// (trackpad'i baştan sona kaydırmak ≈ bir sayfa)
-    private let dragMultiplier: CGFloat = 3.5
+    private let dragMultiplier: CGFloat = 2.4
 
     private var pageCount: Int { max(1, apps.chunked(into: 35).count) }
 
@@ -118,11 +122,11 @@ class LaunchpadViewModel: ObservableObject {
         let distance = toX - fromX
         var relativeVelocity: Double = 0
         if abs(distance) > 1 {
-            relativeVelocity = min(max(Double(velocity / distance), 0), 10)
+            relativeVelocity = min(max(Double(velocity / distance), 0), maxSnapVelocity)
         }
         velocity = 0
 
-        withAnimation(.interpolatingSpring(duration: 0.4, bounce: 0, initialVelocity: relativeVelocity)) {
+        withAnimation(.interpolatingSpring(duration: snapDuration, bounce: 0, initialVelocity: relativeVelocity)) {
             currentPage = target
             dragOffset = 0
         }
