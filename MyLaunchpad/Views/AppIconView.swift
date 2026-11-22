@@ -34,6 +34,14 @@ struct AppIconView: View {
             .opacity(match ? 1 : 0.2)
             .grayscale(match ? 0 : 1)
             .contentShape(Rectangle())
+            // Sürükleyerek yer değiştirme (tıklayıp sürükleyince titreme modu da açılır)
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 4, coordinateSpace: .named("launchpad"))
+                    .onChanged { value in
+                        if match { vm.dragChanged(app, start: value.startLocation, location: value.location) }
+                    }
+                    .onEnded { _ in vm.dragEnded() }
+            )
             
             .onLongPressGesture(minimumDuration: 0.5) {
                 if match {
@@ -64,6 +72,12 @@ struct AppIconView: View {
                     else { NSCursor.pop() }
                 }
             }
+        }
+        .opacity(vm.draggingPath == app.path ? 0 : 1)
+        .onGeometryChange(for: CGRect.self) { proxy in
+            proxy.frame(in: .named("launchpad"))
+        } action: { frame in
+            vm.iconFrames[app.path] = frame
         }
     }
 }

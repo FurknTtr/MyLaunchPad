@@ -9,6 +9,12 @@ import SwiftUI
 import AppKit
 import Combine
 
+/// Sürüklenen simgenin ekrandaki konumu. Ayrı tutuluyor ki fare her kıpırdadığında
+/// bütün simge ızgarası değil, sadece sürüklenen simge yeniden çizilsin.
+final class DragOverlayState: ObservableObject {
+    @Published var position: CGPoint = .zero
+}
+
 class LaunchpadViewModel: ObservableObject {
     @Published var apps: [AppItem] = []
     @Published var currentPage: Int = 0 {
@@ -24,7 +30,7 @@ class LaunchpadViewModel: ObservableObject {
     /// Klavye ve sayfa noktaları için standart sayfa geçişi (zıplamasız yay)
     static let pageAnimation = Animation.spring(duration: 0.5, bounce: 0)
     /// Parmağı bırakınca sayfanın yerine oturma süresi
-    private let snapDuration: TimeInterval = 0.55
+    private let snapDuration: TimeInterval = 0.6
     /// Bırakınca devralınan hızın üst sınırı (yükseldikçe sayfa "fırlar")
     private let maxSnapVelocity: Double = 3
 
@@ -194,6 +200,8 @@ class LaunchpadViewModel: ObservableObject {
     }
     
     func loadApps() {
+        // Sürükleme sırasında liste değişmesin; bırakınca zaten kaydedilecek
+        if draggingPath != nil { scheduleReload(); return }
         let fm = FileManager.default
         let dirs = ["/Applications", "/System/Applications", "/System/Applications/Utilities", "\(NSHomeDirectory())/Applications"]
         var loaded: [AppItem] = [], added: Set<String> = []
@@ -210,7 +218,127 @@ class LaunchpadViewModel: ObservableObject {
                 }
             }
         }
-        self.apps = loaded.sorted { $0.isSystemApp != $1.isSystemApp ? $0.isSystemApp : ($0.isSystemApp ? $0.name < $1.name : $0.creationDate < $1.creationDate) }
+        let defaultOrder = loaded.sorted { $0.isSystemApp != $1.isSystemApp ? $0.isSystemApp : ($0.isSystemApp ? $0.name < $1.name : $0.creationDate < $1.creationDate) }
+
+        // Kullanıcının kaydettiği sıra varsa onu kullan; yeni uygulamalar sona eklenir
+        let saved = UserDefaults.standard.stringArray(forKey: Self.orderKey) ?? []
+        if saved.isEmpty {
+            self.apps = defaultOrder
+        } else {
+            let byPath = Dictionary(defaultOrder.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+            let known = Set(saved)
+            self.apps = saved.compactMap { byPath[$0] } + defaultOrder.filter { !known.contains($0.path) }
+        }
+    }
+
+    // MARK: - Sürükleyerek yer değiştirme
+
+    private static let orderKey = "AppOrder"
+    private static let appsPerPage = 35
+
+    /// Şu an sürüklenen uygulamanın yolu (nil = sürükleme yok)
+    @Published var draggingPath: String?
+    let dragOverlay = DragOverlayState()
+    /// Her simgenin ekrandaki yeri (yayınlanmaz, sadece hedef bulmak için)
+    var iconFrames: [String: CGRect] = [:]
+
+    private var grabOffset: CGSize = .zero
+    private var edgeWorkItem: DispatchWorkItem?
+    private var edgeDirection = 0
+    private let edgeZone: CGFloat = 60              // ekran kenarına bu kadar yaklaşınca
+    private let edgeDelay: TimeInterval = 0.6       // bu kadar bekleyince sayfa değişir
+    private let reorderAnimation = Animation.spring(duration: 0.3, bounce: 0)
+
+    func dragChanged(_ app: AppItem, start: CGPoint, location: CGPoint) {
+        guard searchText.isEmpty else { return }
+        if draggingPath == nil {
+            guard let frame = iconFrames[app.path] else { return }
+            isEditing = true
+            grabOffset = CGSize(width: start.x - frame.midX, height: start.y - frame.midY)
+            dragOverlay.position = CGPoint(x: frame.midX, y: frame.midY)
+            draggingPath = app.path
+        }
+        dragOverlay.position = CGPoint(x: location.x - grabOffset.width, y: location.y - grabOffset.height)
+        reorderIfNeeded(at: location)
+        handleEdge(at: location)
+    }
+
+    func dragEnded() {
+        edgeWorkItem?.cancel()
+        edgeDirection = 0
+        guard let path = draggingPath else { return }
+        saveOrder()
+
+        // Simge bırakıldığı yerden yuvasına süzülsün, sonra gerçek simge görünsün
+        if let frame = iconFrames[path] {
+            withAnimation(reorderAnimation) {
+                dragOverlay.position = CGPoint(x: frame.midX, y: frame.midY)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                guard let self, self.draggingPath == path else { return }
+                self.draggingPath = nil
+            }
+        } else {
+            draggingPath = nil
+        }
+    }
+
+    private func reorderIfNeeded(at location: CGPoint) {
+        guard let dragging = draggingPath,
+              let from = apps.firstIndex(where: { $0.path == dragging }) else { return }
+
+        // İmlecin altındaki simge (kenar paylarında değiştirme, titreşmesin)
+        guard let targetPath = iconFrames.first(where: { entry in
+                  entry.key != dragging &&
+                  entry.value.insetBy(dx: entry.value.width * 0.2, dy: entry.value.height * 0.2).contains(location)
+              })?.key,
+              let to = apps.firstIndex(where: { $0.path == targetPath }),
+              to / Self.appsPerPage == currentPage else { return }
+
+        withAnimation(reorderAnimation) {
+            let item = apps.remove(at: from)
+            apps.insert(item, at: to)
+        }
+    }
+
+    private func handleEdge(at location: CGPoint) {
+        let direction = location.x < edgeZone ? -1 : (location.x > pageWidth - edgeZone ? 1 : 0)
+        guard direction != edgeDirection else { return }
+        edgeDirection = direction
+        edgeWorkItem?.cancel()
+        if direction != 0 { scheduleEdgeTurn() }
+    }
+
+    private func scheduleEdgeTurn() {
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.draggingPath != nil, self.edgeDirection != 0 else { return }
+            let direction = self.edgeDirection
+            let before = self.currentPage
+            self.turnPage(direction: direction)
+            if self.currentPage != before {
+                // Simgeyi yeni sayfaya taşı: ileri giderken başına, geri giderken sonuna
+                self.moveDragged(toPage: self.currentPage, atStart: direction > 0)
+            }
+            // Kenarda beklemeye devam ederse bir sonraki sayfaya da geç
+            self.scheduleEdgeTurn()
+        }
+        edgeWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + edgeDelay, execute: item)
+    }
+
+    private func moveDragged(toPage page: Int, atStart: Bool) {
+        guard let dragging = draggingPath,
+              let from = apps.firstIndex(where: { $0.path == dragging }),
+              from / Self.appsPerPage != page else { return }
+        var items = apps
+        let item = items.remove(at: from)
+        let wanted = atStart ? page * Self.appsPerPage : page * Self.appsPerPage + Self.appsPerPage - 1
+        items.insert(item, at: min(max(wanted, 0), items.count))
+        withAnimation(reorderAnimation) { apps = items }
+    }
+
+    private func saveOrder() {
+        UserDefaults.standard.set(apps.map(\.path), forKey: Self.orderKey)
     }
     
     /// Silmeden önce eski Launchpad'deki gibi onay sorar

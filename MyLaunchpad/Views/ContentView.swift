@@ -69,11 +69,40 @@ struct ContentView: View {
                     .keyboardShortcut("q", modifiers: .command)
             }.opacity(0)
         }
+        .overlay { DraggedIconOverlay(vm: vm, overlay: vm.dragOverlay) }
+        .coordinateSpace(.named("launchpad"))
         .onAppear {
             vm.loadApps()
             vm.setupMonitor()
             vm.startWatchingAppFolders()
         }
         .onDisappear { vm.cleanup() }
+    }
+}
+
+/// Sürüklenen simgenin imleci takip eden kopyası
+struct DraggedIconOverlay: View {
+    @ObservedObject var vm: LaunchpadViewModel
+    @ObservedObject var overlay: DragOverlayState
+
+    var body: some View {
+        if let path = vm.draggingPath, let app = vm.apps.first(where: { $0.path == path }) {
+            VStack(spacing: 12) {
+                Image(nsImage: app.icon)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 80, height: 80)
+                Text(app.name)
+                    .font(.system(size: 14))
+                    .foregroundColor(.white)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(width: 100)
+            .scaleEffect(1.1)
+            .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+            .position(overlay.position)
+            .allowsHitTesting(false)
+        }
     }
 }
