@@ -4,19 +4,30 @@ import AppKit
 @main
 struct MyLaunchpadApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    
+
     var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
-        .commands { CommandGroup(replacing: .newItem) {} }
+        // Asıl tam ekran pencereyi AppDelegate kendisi oluşturuyor
+        // (klavye alabilen özel pencere). Burada boş bir sahne yeterli.
+        Settings { EmptyView() }
     }
+}
+
+/// Kenarlıksız pencereler varsayılan olarak klavye odağı alamaz;
+/// bu alt sınıf Esc, ok tuşları ve arama kutusunun çalışmasını sağlar.
+final class LaunchpadWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var iconCache: [String: NSImage] = [:]
-    
+    private var window: LaunchpadWindow?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+        createWindow()
+        showLaunchpad()
+
         // Arka planda ikonları önceden yükle
         DispatchQueue.global(qos: .background).async {
             self.preloadIcons()
@@ -38,11 +49,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func createWindow() {
+        let frame = NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let window = LaunchpadWindow(
+            contentRect: frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.level = .mainMenu + 1
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.hasShadow = false
+        window.isReleasedWhenClosed = false
+        // Hangi masaüstündeysen orada açılsın, tam ekran uygulamaların üstünde de görünsün
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
+        let hostingView = NSHostingView(rootView: ContentView())
+        hostingView.sizingOptions = [] // SwiftUI pencereyi küçültmesin, tam ekran kalsın
+        window.contentView = hostingView
+
+        self.window = window
+    }
+
     func showLaunchpad() {
-        NSApp.unhide(nil)
-        if let window = NSApplication.shared.windows.first {
-            window.makeKeyAndOrderFront(nil)
+        guard let window else { return }
+        if let screen = NSScreen.main, window.frame != screen.frame {
+            window.setFrame(screen.frame, display: true)
         }
+        NSApp.unhide(nil)
+        window.makeKeyAndOrderFront(nil)
         // Arka plandaki (accessory) bir uygulamanın öne gelmesi için zorla etkinleştir;
         // yeni NSApp.activate() başka uygulama öndeyken etkinleştirmeyi reddedebiliyor.
         NSApp.activate(ignoringOtherApps: true)
@@ -50,24 +86,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func hideLaunchpad() {
         // Uygulamanın "aktif" sayılmasına bakmadan, pencere ekrandaysa gizle
-        guard !NSApp.isHidden,
-              let window = NSApplication.shared.windows.first,
-              window.isVisible else { return }
+        guard !NSApp.isHidden, let window, window.isVisible else { return }
         NSApp.hide(nil)
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if let window = NSApplication.shared.windows.first {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-        }
+        showLaunchpad()
         return true
     }
-    
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false // Pencere kapansa bile arka planda yaşa
     }
-    
+
     private func preloadIcons() {
         let dirs = ["/Applications", "/System/Applications"]
         let fm = FileManager.default
@@ -83,7 +114,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
-    
+
     func cachedIcon(for path: String) -> NSImage? {
         return iconCache[path]
     }

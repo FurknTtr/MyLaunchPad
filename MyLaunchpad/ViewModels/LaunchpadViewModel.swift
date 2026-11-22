@@ -18,51 +18,125 @@ class LaunchpadViewModel: ObservableObject {
     @Published var searchText = ""
     @Published var dragOffset: CGFloat = 0
     
+    /// Sayfa genişliği (ContentView ekran boyutuna göre günceller)
+    var pageWidth: CGFloat = 1440
+
+    /// Klavye ve sayfa noktaları için standart sayfa geçişi (zıplamasız yay)
+    static let pageAnimation = Animation.spring(duration: 0.4, bounce: 0)
+
     private var scrollMonitor: Any?
     private var snapWorkItem: DispatchWorkItem?
-    
+
+    // Sürükleme durumu
+    private var isDragging = false
+    private var velocity: CGFloat = 0          // nokta/saniye
+    private var lastEventTime: TimeInterval = 0
+
+    // Sayfa değiştirme eşikleri
+    private let distanceThreshold: CGFloat = 0.3   // sayfa genişliğinin %30'u kadar sürükleyince
+    private let flickVelocity: CGFloat = 400       // ya da bu hızdan hızlı fırlatınca (nokta/sn)
+    private let edgeResistance: CGFloat = 0.3      // ilk/son sayfada lastik efekti
+
+    private var pageCount: Int { max(1, apps.chunked(into: 35).count) }
+
     init() {
         self.currentPage = UserDefaults.standard.integer(forKey: "LastLaunchpadPage")
     }
-    
+
     func setupMonitor() {
         if scrollMonitor != nil { return }
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-            guard let self = self else { return event }
-            if !event.momentumPhase.isEmpty {
-                if self.dragOffset != 0 { DispatchQueue.main.async { self.snapPage() } }
-                return event
-            }
-            if abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) {
-                self.snapWorkItem?.cancel()
-                DispatchQueue.main.async {
-                    let pageCount = max(1, self.apps.chunked(into: 35).count)
-                    let isAtLeftEdge = self.currentPage == 0 && event.scrollingDeltaX > 0
-                    let isAtRightEdge = self.currentPage == pageCount - 1 && event.scrollingDeltaX < 0
-                    if isAtLeftEdge || isAtRightEdge { self.dragOffset += event.scrollingDeltaX * 0.3 }
-                    else { self.dragOffset += event.scrollingDeltaX }
-                }
-                let workItem = DispatchWorkItem { [weak self] in self?.snapPage() }
-                self.snapWorkItem = workItem
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: workItem)
-            }
+            self?.handleScroll(event)
             return event
         }
     }
-    
-    func snapPage() {
-        let threshold: CGFloat = 80
-        if self.dragOffset < -threshold { turnPage(direction: 1) }
-        else if self.dragOffset > threshold { turnPage(direction: -1) }
-        else {
-            withAnimation(.easeInOut(duration: 0.25)) { self.dragOffset = 0 }
+
+    private func handleScroll(_ event: NSEvent) {
+        // Parmak kalktıktan sonra macOS'un gönderdiği "momentum" olaylarını yok say:
+        // sayfa zaten parmağın kalktığı anda yerine oturmaya başladı.
+        if !event.momentumPhase.isEmpty { return }
+
+        // Trackpad hareketinin bittiği an: hemen yerine oturt (bekleme yok)
+        if event.phase == .ended || event.phase == .cancelled {
+            if isDragging { endDrag() }
+            return
+        }
+
+        let dx = event.scrollingDeltaX
+        let isHorizontal = abs(dx) > abs(event.scrollingDeltaY)
+        guard isDragging || isHorizontal, dx != 0 else { return }
+
+        // Parmak hızını ölç (yumuşatılmış)
+        let now = event.timestamp
+        let dt = now - lastEventTime
+        if !isDragging || dt <= 0 || dt > 0.1 {
+            velocity = 0
+        } else {
+            velocity = velocity * 0.6 + (dx / CGFloat(dt)) * 0.4
+        }
+        lastEventTime = now
+        isDragging = true
+
+        // İlk/son sayfanın kenarında lastik gibi direnç
+        let atLeftEdge = currentPage == 0 && dragOffset + dx > 0
+        let atRightEdge = currentPage == pageCount - 1 && dragOffset + dx < 0
+        dragOffset += (atLeftEdge || atRightEdge) ? dx * edgeResistance : dx
+
+        // Fare tekerleği gibi "phase" göndermeyen cihazlar için yedek: kısa bekleme sonrası oturt
+        if event.phase.isEmpty {
+            snapWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in self?.endDrag() }
+            snapWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: workItem)
         }
     }
-    
+
+    private func endDrag() {
+        snapWorkItem?.cancel()
+        isDragging = false
+        let width = max(pageWidth, 1)
+
+        // Hızlı fırlatma varsa yönü hız belirler, yoksa sürüklenen mesafe
+        var target = currentPage
+        if abs(velocity) > flickVelocity {
+            target += velocity < 0 ? 1 : -1
+        } else if dragOffset < -width * distanceThreshold {
+            target += 1
+        } else if dragOffset > width * distanceThreshold {
+            target -= 1
+        }
+        target = max(0, min(target, pageCount - 1))
+
+        // Animasyon parmağın bıraktığı hızla başlasın, sonra yumuşakça yavaşlasın
+        let fromX = -CGFloat(currentPage) * width + dragOffset
+        let toX = -CGFloat(target) * width
+        let distance = toX - fromX
+        var relativeVelocity: Double = 0
+        if abs(distance) > 1 {
+            relativeVelocity = min(max(Double(velocity / distance), 0), 10)
+        }
+        velocity = 0
+
+        withAnimation(.interpolatingSpring(duration: 0.4, bounce: 0, initialVelocity: relativeVelocity)) {
+            currentPage = target
+            dragOffset = 0
+        }
+    }
+
     func turnPage(direction: Int) {
-        let pageCount = max(1, self.apps.chunked(into: 35).count)
-        currentPage = max(0, min(currentPage + direction, pageCount - 1))
-        withAnimation(.easeInOut(duration: 0.25)) { self.dragOffset = 0 }
+        let target = max(0, min(currentPage + direction, pageCount - 1))
+        withAnimation(Self.pageAnimation) {
+            currentPage = target
+            dragOffset = 0
+        }
+    }
+
+    func goToPage(_ page: Int) {
+        let target = max(0, min(page, pageCount - 1))
+        withAnimation(Self.pageAnimation) {
+            currentPage = target
+            dragOffset = 0
+        }
     }
     
     func cleanup() { if let monitor = scrollMonitor { NSEvent.removeMonitor(monitor); scrollMonitor = nil } }
