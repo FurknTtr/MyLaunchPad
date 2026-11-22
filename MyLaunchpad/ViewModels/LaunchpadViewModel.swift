@@ -18,7 +18,10 @@ final class DragOverlayState: ObservableObject {
 class LaunchpadViewModel: ObservableObject {
     @Published var apps: [AppItem] = []
     @Published var currentPage: Int = 0 {
-        didSet { UserDefaults.standard.set(currentPage, forKey: "LastLaunchpadPage") }
+        didSet {
+            UserDefaults.standard.set(currentPage, forKey: "LastLaunchpadPage")
+            moveSelectionToCurrentPage()
+        }
     }
     @Published var isEditing = false
     @Published var searchText = ""
@@ -237,6 +240,17 @@ class LaunchpadViewModel: ObservableObject {
     /// Klavyeyle seçili uygulama (nil = seçim yok)
     @Published var selectedPath: String?
     private static let columnsPerPage = 7
+
+    /// Sayfa değişince (Cmd+Ok, kaydırma, noktalar) klavye seçimi de yeni sayfada
+    /// aynı konuma geçer; o konum boşsa sayfanın son uygulamasına
+    private func moveSelectionToCurrentPage() {
+        guard let path = selectedPath,
+              let index = apps.firstIndex(where: { $0.path == path }),
+              index / Self.appsPerPage != currentPage else { return }
+        let slot = index % Self.appsPerPage
+        let newIndex = min(currentPage * Self.appsPerPage + slot, apps.count - 1)
+        selectedPath = apps[newIndex].path
+    }
 
     func isMatch(_ app: AppItem) -> Bool {
         searchText.isEmpty || app.name.localizedStandardContains(searchText)
