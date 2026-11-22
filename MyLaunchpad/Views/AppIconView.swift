@@ -45,12 +45,12 @@ struct AppIconView: View {
             .onTapGesture {
                 if !vm.isEditing && match {
                     NSWorkspace.shared.open(URL(fileURLWithPath: app.path))
-                    NSApp.hide(nil)
+                    LaunchpadPresenter.shared.hide()
                 }
             }
             
             if vm.isEditing && !app.isSystemApp && match {
-                Button(action: { vm.deleteApp(app) }) {
+                Button(action: { vm.confirmDelete(app) }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 22, weight: .bold))
                         .foregroundColor(isHoveringX ? .red : .white.opacity(0.85))

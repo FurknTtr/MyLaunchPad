@@ -18,7 +18,7 @@ struct ContentView: View {
             Rectangle().fill(Color.white.opacity(0.01)).contentShape(Rectangle()).ignoresSafeArea().onTapGesture {
                 if vm.isEditing { vm.isEditing = false }
                 else if !vm.searchText.isEmpty { vm.searchText = "" }
-                else { NSApp.hide(nil) }
+                else { LaunchpadPresenter.shared.hide() }
             }
             
             GeometryReader { geo in
@@ -53,7 +53,7 @@ struct ContentView: View {
                 Button(action: {
                     if vm.isEditing { vm.isEditing = false }
                     else if !vm.searchText.isEmpty { vm.searchText = "" }
-                    else { NSApp.hide(nil) }
+                    else { LaunchpadPresenter.shared.hide() }
                 }) { EmptyView() }.keyboardShortcut(.escape, modifiers: [])
                 
                 Button(action: { vm.turnPage(direction: 1) }) { EmptyView() }
@@ -70,6 +70,7 @@ struct ContentView: View {
         .onAppear {
             vm.loadApps()
             vm.setupMonitor()
+            vm.startWatchingAppFolders()
         }
         .onDisappear { vm.cleanup() }
     }

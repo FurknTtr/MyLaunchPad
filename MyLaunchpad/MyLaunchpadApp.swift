@@ -26,17 +26,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         createWindow()
-        showLaunchpad()
+        LaunchpadPresenter.shared.show()
 
         // Arka planda ikonları önceden yükle
         DispatchQueue.global(qos: .background).async {
             self.preloadIcons()
         }
 
-        // 4/5 parmak pinch: içeri = aç, dışarı = kapat
+        // 4/5 parmak pinch: parmakla birlikte açılır/kapanır
         let monitor = GestureMonitor.shared
-        monitor.onPinchIn = { [weak self] in self?.showLaunchpad() }
-        monitor.onPinchOut = { [weak self] in self?.hideLaunchpad() }
+        monitor.onPinchChanged = { ratio in
+            LaunchpadPresenter.shared.pinchChanged(ratio: ratio)
+        }
+        monitor.onPinchEnded = { ratio, velocity in
+            LaunchpadPresenter.shared.pinchEnded(ratio: ratio, velocity: velocity)
+        }
         monitor.start()
 
         // Uykudan uyanınca trackpad dinlemeyi yeniden başlat
@@ -65,33 +69,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Hangi masaüstündeysen orada açılsın, tam ekran uygulamaların üstünde de görünsün
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        let hostingView = NSHostingView(rootView: ContentView())
+        let hostingView = NSHostingView(rootView: LaunchpadRoot(presenter: .shared))
         hostingView.sizingOptions = [] // SwiftUI pencereyi küçültmesin, tam ekran kalsın
         window.contentView = hostingView
 
         self.window = window
-    }
-
-    func showLaunchpad() {
-        guard let window else { return }
-        if let screen = NSScreen.main, window.frame != screen.frame {
-            window.setFrame(screen.frame, display: true)
-        }
-        NSApp.unhide(nil)
-        window.makeKeyAndOrderFront(nil)
-        // Arka plandaki (accessory) bir uygulamanın öne gelmesi için zorla etkinleştir;
-        // yeni NSApp.activate() başka uygulama öndeyken etkinleştirmeyi reddedebiliyor.
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    func hideLaunchpad() {
-        // Uygulamanın "aktif" sayılmasına bakmadan, pencere ekrandaysa gizle
-        guard !NSApp.isHidden, let window, window.isVisible else { return }
-        NSApp.hide(nil)
+        LaunchpadPresenter.shared.window = window
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showLaunchpad()
+        LaunchpadPresenter.shared.show()
         return true
     }
 

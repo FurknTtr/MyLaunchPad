@@ -3,7 +3,8 @@
 //  MyLaunchpad
 //
 //  Trackpad'deki ham dokunuşları Apple'ın gizli MultitouchSupport
-//  framework'ü üzerinden okur ve 4/5 parmak pinch hareketini algılar.
+//  framework'ü üzerinden okur ve 4/5 parmak pinch hareketini
+//  parmakla birlikte, anlık ilerleme olarak bildirir.
 //  Not: Gizli API kullandığı için App Sandbox kapalı olmalı ve
 //  uygulama App Store'a gönderilemez (kişisel kullanım için sorun yok).
 //
@@ -14,10 +15,11 @@ import AppKit
 nonisolated final class GestureMonitor: @unchecked Sendable {
     static let shared = GestureMonitor()
 
-    /// Parmaklar birbirine yaklaşınca (Launchpad'i açma hareketi)
-    var onPinchIn: (@MainActor @Sendable () -> Void)?
-    /// Parmaklar açılınca (Launchpad'i kapatma hareketi)
-    var onPinchOut: (@MainActor @Sendable () -> Void)?
+    /// Hareket sürerken her karede: parmak açıklığının başlangıca oranı
+    /// (1 = başlangıç, <1 = kıstırılıyor, >1 = açılıyor)
+    var onPinchChanged: (@MainActor @Sendable (_ ratio: Float) -> Void)?
+    /// Parmaklar kalkınca: son oran ve oranın değişim hızı (saniyede)
+    var onPinchEnded: (@MainActor @Sendable (_ ratio: Float, _ velocity: Float) -> Void)?
 
     // MARK: - MultitouchSupport fonksiyon imzaları
 
@@ -43,20 +45,31 @@ nonisolated final class GestureMonitor: @unchecked Sendable {
     private static let xOffset = 32
     private static let yOffset = 36
 
-    // Hareket eşikleri
+    // Hareket ayarları
     private static let minFingers = 4
-    private static let pinchInRatio: Float = 0.65   // parmaklar başlangıca göre %35 yaklaşınca
-    private static let pinchOutRatio: Float = 1.4   // parmaklar başlangıca göre %40 açılınca
     private static let minStartSpread: Float = 0.02
+    /// Bu kadar değişmeden (±%6) ekranda hiçbir şey olmaz; titreme ve yanlış tetiklemeyi önler
+    private static let deadZone: Float = 0.06
+    /// Parmakların merkezi bu kadar kayıp açıklık az değiştiyse bu bir kaydırmadır (masaüstü geçişi vb.)
+    private static let swipeShift: Float = 0.1
 
     // Hareket durumu (yalnızca MultitouchSupport'un callback thread'inden kullanılır)
     private var tracking = false
-    private var fired = false
+    private var active = false
+    private var swipeLocked = false
     private var startSpread: Float = 0
     private var startCount = 0
+    private var startCenter = (x: Float(0), y: Float(0))
+    private var lastRatio: Float = 1
+    private var lastTime: Double = 0
+    private var ratioVelocity: Float = 0
 
-    private static let callback: ContactCallback = { _, touches, count, _, _ in
-        GestureMonitor.shared.handle(touches: touches, count: Int(count))
+    // Ana thread'e giden güncellemeleri birleştirmek için (kare başına en fazla bir iş)
+    private let lock = NSLock()
+    private var pendingRatio: Float?
+
+    private static let callback: ContactCallback = { _, touches, count, timestamp, _ in
+        GestureMonitor.shared.handle(touches: touches, count: Int(count), timestamp: timestamp)
         return 0
     }
 
@@ -85,7 +98,8 @@ nonisolated final class GestureMonitor: @unchecked Sendable {
         devices.removeAll()
         deviceList = nil
         tracking = false
-        fired = false
+        active = false
+        swipeLocked = false
     }
 
     /// Uyku sonrası trackpad bağlantısı kopabildiği için yeniden başlatılır.
@@ -114,17 +128,20 @@ nonisolated final class GestureMonitor: @unchecked Sendable {
         return true
     }
 
-    // MARK: - Pinch algılama
+    // MARK: - Pinch takibi
 
-    private func handle(touches: UnsafeMutableRawPointer?, count: Int) {
+    private func handle(touches: UnsafeMutableRawPointer?, count: Int, timestamp: Double) {
         guard let touches, count >= GestureMonitor.minFingers else {
-            // Parmaklar kalkınca bir sonraki harekete hazırlan
+            // Parmaklar kalktı: hareket sürüyorsa bitişini bildir
+            if active { publishEnd(ratio: lastRatio, velocity: ratioVelocity) }
             tracking = false
-            fired = false
+            active = false
+            swipeLocked = false
+            ratioVelocity = 0
             return
         }
 
-        // Parmakların ortalama merkezden uzaklığı = "açıklık"
+        // Parmakların merkezi ve ortalama uzaklığı (= açıklık)
         var xs = [Float](repeating: 0, count: count)
         var ys = [Float](repeating: 0, count: count)
         var cx: Float = 0, cy: Float = 0
@@ -146,28 +163,81 @@ nonisolated final class GestureMonitor: @unchecked Sendable {
         }
         spread /= Float(count)
 
-        // Yeni hareket ya da parmak sayısı değişti: başlangıç noktasını kaydet
-        if !tracking || count != startCount {
+        // Yeni hareket: başlangıç noktasını kaydet
+        if !tracking {
             tracking = true
             startCount = count
             startSpread = spread
+            startCenter = (cx, cy)
+            lastRatio = 1
+            lastTime = timestamp
             return
         }
 
-        guard !fired, startSpread > GestureMonitor.minStartSpread else { return }
+        // Parmak sayısı değişti (5. parmak değdi vb.): kaldığı oran korunarak devam et
+        if count != startCount {
+            startCount = count
+            if lastRatio > 0 { startSpread = spread / lastRatio }
+            lastTime = timestamp
+            return
+        }
+
+        guard startSpread > GestureMonitor.minStartSpread, !swipeLocked else { return }
 
         let ratio = spread / startSpread
-        if ratio < GestureMonitor.pinchInRatio {
-            fired = true
-            fire(onPinchIn)
-        } else if ratio > GestureMonitor.pinchOutRatio {
-            fired = true
-            fire(onPinchOut)
+        let dt = Float(timestamp - lastTime)
+        if dt > 0, dt < 0.1 {
+            ratioVelocity = ratioVelocity * 0.6 + ((ratio - lastRatio) / dt) * 0.4
+        }
+        lastRatio = ratio
+        lastTime = timestamp
+
+        if !active {
+            let shiftX = cx - startCenter.x
+            let shiftY = cy - startCenter.y
+            let centerShift = (shiftX * shiftX + shiftY * shiftY).squareRoot()
+            let spreadChange = abs(spread - startSpread)
+
+            // Parmaklar birlikte kayıyorsa bu pinch değil kaydırmadır: bu dokunuşu yok say
+            if centerShift > GestureMonitor.swipeShift && spreadChange < centerShift * 0.5 {
+                swipeLocked = true
+                return
+            }
+            guard abs(ratio - 1) > GestureMonitor.deadZone, spreadChange > centerShift * 0.5 else { return }
+            active = true
+        }
+
+        publishChange(ratio: ratio)
+    }
+
+    // MARK: - Ana thread'e bildirim
+
+    private func publishChange(ratio: Float) {
+        lock.lock()
+        let needsSchedule = pendingRatio == nil
+        pendingRatio = ratio
+        lock.unlock()
+
+        guard needsSchedule, let handler = onPinchChanged else { return }
+        DispatchQueue.main.async {
+            guard let value = GestureMonitor.shared.takePendingRatio() else { return }
+            MainActor.assumeIsolated { handler(value) }
         }
     }
 
-    private func fire(_ handler: (@MainActor @Sendable () -> Void)?) {
-        guard let handler else { return }
-        Task { @MainActor in handler() }
+    private func publishEnd(ratio: Float, velocity: Float) {
+        guard let handler = onPinchEnded else { return }
+        // Sıralı kuyruk: bekleyen son güncellemeden sonra çalışır
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { handler(ratio, velocity) }
+        }
+    }
+
+    private func takePendingRatio() -> Float? {
+        lock.lock()
+        defer { lock.unlock() }
+        let value = pendingRatio
+        pendingRatio = nil
+        return value
     }
 }

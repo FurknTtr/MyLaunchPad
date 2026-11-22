@@ -139,7 +139,50 @@ class LaunchpadViewModel: ObservableObject {
         }
     }
     
-    func cleanup() { if let monitor = scrollMonitor { NSEvent.removeMonitor(monitor); scrollMonitor = nil } }
+    func cleanup() {
+        if let monitor = scrollMonitor { NSEvent.removeMonitor(monitor); scrollMonitor = nil }
+        folderWatchers.forEach { $0.cancel() }
+        folderWatchers.removeAll()
+    }
+
+    // MARK: - Yeni/silinen uygulamaları otomatik algılama
+
+    private var folderWatchers: [DispatchSourceFileSystemObject] = []
+    private var reloadWorkItem: DispatchWorkItem?
+
+    /// Uygulamalar klasörlerini izler; bir uygulama eklenince, silinince
+    /// ya da güncellenince listeyi kendiliğinden yeniler.
+    func startWatchingAppFolders() {
+        guard folderWatchers.isEmpty else { return }
+        // Sistem klasörleri (/System/Applications) salt okunur, izlemeye gerek yok
+        for dir in ["/Applications", "\(NSHomeDirectory())/Applications"] {
+            let fd = open(dir, O_EVTONLY)
+            guard fd >= 0 else { continue }
+            let source = DispatchSource.makeFileSystemObjectSource(
+                fileDescriptor: fd,
+                eventMask: [.write, .rename, .delete],
+                queue: .main
+            )
+            source.setEventHandler { [weak self] in
+                MainActor.assumeIsolated { self?.scheduleReload() }
+            }
+            source.setCancelHandler { close(fd) }
+            source.resume()
+            folderWatchers.append(source)
+        }
+    }
+
+    private func scheduleReload() {
+        // Bir kurulum art arda çok sayıda değişiklik yapar; hepsi bitince tek sefer yenile
+        reloadWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            self?.loadApps()
+            // Büyük uygulamaların kopyalanması sürebilir; simgesi tam gelsin diye bir kez daha yenile
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.loadApps() }
+        }
+        reloadWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: item)
+    }
     
     func loadApps() {
         let fm = FileManager.default
@@ -161,6 +204,28 @@ class LaunchpadViewModel: ObservableObject {
         self.apps = loaded.sorted { $0.isSystemApp != $1.isSystemApp ? $0.isSystemApp : ($0.isSystemApp ? $0.name < $1.name : $0.creationDate < $1.creationDate) }
     }
     
+    /// Silmeden önce eski Launchpad'deki gibi onay sorar
+    func confirmDelete(_ app: AppItem) {
+        let alert = NSAlert()
+        alert.messageText = "“\(app.name)” Çöp Sepeti'ne taşınsın mı?"
+        alert.informativeText = "Fikrini değiştirirsen uygulamayı Çöp Sepeti'nden geri alabilirsin."
+        alert.icon = app.icon
+        alert.addButton(withTitle: "Çöp Sepeti'ne Taşı")
+        alert.addButton(withTitle: "Vazgeç")
+        alert.buttons[0].hasDestructiveAction = true
+        alert.buttons[1].keyEquivalent = "\u{1b}" // Esc = Vazgeç
+
+        let handler: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            if response == .alertFirstButtonReturn { self?.deleteApp(app) }
+        }
+        // Tam ekran pencerenin üstünde görünmesi için ona bağlı açılır
+        if let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }) {
+            alert.beginSheetModal(for: window, completionHandler: handler)
+        } else {
+            handler(alert.runModal())
+        }
+    }
+
     func deleteApp(_ app: AppItem) {
         NSWorkspace.shared.recycle([URL(fileURLWithPath: app.path)]) { _, _ in
             DispatchQueue.main.async { self.apps.removeAll { $0.id == app.id } }
