@@ -317,6 +317,7 @@ class LaunchpadViewModel: ObservableObject {
             forName: NSApplication.didHideNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
+                self?.cancelDrag()
                 self?.isFolderOpen = false
                 self?.isSettingsOpen = false
                 self?.isEditing = false
@@ -415,24 +416,85 @@ class LaunchpadViewModel: ObservableObject {
     private let edgeDelay: TimeInterval = 0.6       // bu kadar bekleyince sayfa değişir
     private let reorderAnimation = Animation.spring(duration: 0.3, bounce: 0)
 
+    /// SwiftUI'nin sürükleme hareketi sadece sürüklemeyi BAŞLATIR. Sonrasını macOS'un fare
+    /// olaylarıyla takip ederiz: simgeler yer değiştirince SwiftUI sürüklenen simgenin görünümünü
+    /// baştan oluşturabiliyor ve o zaman kendi hareketini sessizce iptal edip "bitti" demiyordu
+    /// (simge havada donup kalıyordu).
     func dragChanged(_ app: AppItem, start: CGPoint, location: CGPoint) {
-        guard searchText.isEmpty, !isPanelOpen else { return }
-        if draggingPath == nil {
-            guard let frame = iconFrames[app.path] else { return }
-            isEditing = true
-            grabOffset = CGSize(width: start.x - frame.midX, height: start.y - frame.midY)
-            dragOverlay.position = CGPoint(x: frame.midX, y: frame.midY)
-            draggingPath = app.path
+        guard draggingPath == nil, searchText.isEmpty, !isPanelOpen,
+              let frame = iconFrames[app.path] else { return }
+        isEditing = true
+        grabOffset = CGSize(width: start.x - frame.midX, height: start.y - frame.midY)
+        draggingPath = app.path
+
+        // Pencere koordinatı ile SwiftUI koordinatı arasındaki farkı bir kez ölç
+        if let event = NSApp.currentEvent, let point = flippedLocation(of: event) {
+            windowToSpace = CGSize(width: location.x - point.x, height: location.y - point.y)
+        } else {
+            windowToSpace = .zero
         }
+        startDragEventMonitor()
+        dragMoved(to: location)
+    }
+
+    private func dragMoved(to location: CGPoint) {
         dragOverlay.position = CGPoint(x: location.x - grabOffset.width, y: location.y - grabOffset.height)
         reorderIfNeeded(at: location)
         handleEdge(at: location)
     }
 
-    func dragEnded() {
+    private var dragEventMonitor: Any?
+    private var windowToSpace: CGSize = .zero
+
+    private func startDragEventMonitor() {
+        stopDragEventMonitor()
+        dragEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            guard let self, self.draggingPath != nil else { return event }
+            if event.type == .leftMouseUp {
+                self.dragEnded()
+            } else if let point = self.flippedLocation(of: event) {
+                self.dragMoved(to: CGPoint(x: point.x + self.windowToSpace.width,
+                                           y: point.y + self.windowToSpace.height))
+            }
+            return event
+        }
+    }
+
+    private func stopDragEventMonitor() {
+        if let monitor = dragEventMonitor {
+            NSEvent.removeMonitor(monitor)
+            dragEventMonitor = nil
+        }
+    }
+
+    /// Fare konumu, sol üst köşe başlangıçlı (SwiftUI gibi) pencere koordinatında
+    private func flippedLocation(of event: NSEvent) -> CGPoint? {
+        guard let window = event.window ?? NSApp.keyWindow else { return nil }
+        let height = window.contentView?.bounds.height ?? window.frame.height
+        return CGPoint(x: event.locationInWindow.x, y: height - event.locationInWindow.y)
+    }
+
+    /// Yarım kalan sürüklemeyi animasyonsuz temizler (Launchpad kapanınca)
+    func cancelDrag() {
+        stopDragEventMonitor()
         edgeWorkItem?.cancel()
         edgeDirection = 0
-        guard let path = draggingPath else { return }
+        isDropping = false
+        if draggingPath != nil {
+            saveOrder()
+            draggingPath = nil
+        }
+    }
+
+    /// Bırakma animasyonu sürüyor mu (fare bırakılınca hem bizim izleyici hem SwiftUI haber verir; bir kez işle)
+    private var isDropping = false
+
+    func dragEnded() {
+        stopDragEventMonitor()
+        edgeWorkItem?.cancel()
+        edgeDirection = 0
+        guard let path = draggingPath, !isDropping else { return }
+        isDropping = true
         saveOrder()
 
         // Simge bırakıldığı yerden yuvasına süzülsün, sonra gerçek simge görünsün
@@ -441,10 +503,12 @@ class LaunchpadViewModel: ObservableObject {
                 dragOverlay.position = CGPoint(x: frame.midX, y: frame.midY)
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-                guard let self, self.draggingPath == path else { return }
-                self.draggingPath = nil
+                guard let self else { return }
+                self.isDropping = false
+                if self.draggingPath == path { self.draggingPath = nil }
             }
         } else {
+            isDropping = false
             draggingPath = nil
         }
     }
